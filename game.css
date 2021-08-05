@@ -1,0 +1,20 @@
+body {
+  background-color: bisque;
+}
+
+#board {
+  position: relative;
+  outline: solid #0f0f0f;
+  width: 987px;
+  height: 671px;
+}
+
+canvas.area {
+  position: absolute;
+}
+
+#blocks,
+#playarea {
+  top: 35px;
+  left: 2px;
+}
