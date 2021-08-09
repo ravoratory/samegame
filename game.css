@@ -5,8 +5,8 @@ body {
 #board {
   position: relative;
   outline: solid #0f0f0f;
-  width: 987px;
-  height: 671px;
+  width: 990px;
+  height: 674px;
 }
 
 canvas.area {
