@@ -1,0 +1,6 @@
+# for vscode settings
+.vscode
+# for CloudFormation preset
+file:
+# for debugger
+tools
