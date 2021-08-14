@@ -1,4 +1,4 @@
-import Random from "./utils/random";
+import { Random } from "./random";
 
 const BLOCKS_HORIZONTAL = 14;
 const BLOCKS_VERTICAL = 9;
@@ -24,12 +24,12 @@ const BLOCK_COLOR = [
 ];
 
 const playarea = document.getElementById("playarea");
-const scoreCtx = document.getElementById("score").getContext("2d");
-const blockCtx = document.getElementById("blocks").getContext("2d");
+const scoreCtx = document.getElementById("score")?.getContext("2d");
+const blockCtx = document.getElementById("blocks")?.getContext("2d");
 
 const JPNFormat = new Intl.NumberFormat("ja-JP");
 
-const random = Random(20210815);
+const random = new Random(20210815);
 /**
  * Shuffle array by Fisher–Yates shuffle
  * @param {any[]} array input array
@@ -68,8 +68,8 @@ const calcClearBonusScore = (n) =>
 
 /**
  * Find the same block adjacent to the selected block
- * @param {number[]} indexes
- * @returns {number[]} block indexes
+ * @param {number[]} start
+ * @returns {number[any[]]} block indexes
  */
 const findSameBlocks = (start) => {
   const d = [
@@ -84,7 +84,7 @@ const findSameBlocks = (start) => {
   const W = BLOCKS_HORIZONTAL;
   const color = board[start[0]][start[1]];
   if (color === "6") return [start];
-  const visited = [...Array(9).fill().map(Array(14).fill(false))];
+  const visited = [...Array(9).fill(0).map(Array(14).fill(false))];
   q.push(start);
   while (q.length) {
     const p = q.shift();

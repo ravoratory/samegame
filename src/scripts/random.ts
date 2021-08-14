@@ -1,5 +1,9 @@
 export const Random = class {
-  constructor(seed) {
+  w: number;
+  x: number;
+  y: number;
+  z: number;
+  constructor(seed: number) {
     this.w = seed ?? Math.floor(Math.random() * 1e9);
     this.x = 483210922;
     this.y = 854321471;
