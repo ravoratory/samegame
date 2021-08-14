@@ -1,3 +1,5 @@
+import Random from "./utils/random";
+
 const BLOCKS_HORIZONTAL = 14;
 const BLOCKS_VERTICAL = 9;
 const BOARD_SIZE = BLOCKS_HORIZONTAL * BLOCKS_VERTICAL;
@@ -27,6 +29,7 @@ const blockCtx = document.getElementById("blocks").getContext("2d");
 
 const JPNFormat = new Intl.NumberFormat("ja-JP");
 
+const random = Random(20210815);
 /**
  * Shuffle array by Fisher–Yates shuffle
  * @param {any[]} array input array
@@ -34,7 +37,7 @@ const JPNFormat = new Intl.NumberFormat("ja-JP");
  */
 const shuffle = ([...array]) => {
   for (let i = array.length - 1; i >= 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
+    const j = random.rangeInt(0, BOARD_SIZE);
     [array[i], array[j]] = [array[j], array[i]];
   }
   return array;
@@ -81,11 +84,7 @@ const findSameBlocks = (start) => {
   const W = BLOCKS_HORIZONTAL;
   const color = board[start[0]][start[1]];
   if (color === "6") return [start];
-  const visited = [
-    ...Array(9)
-      .fill()
-      .map((_) => Array(14).fill(false)),
-  ];
+  const visited = [...Array(9).fill().map(Array(14).fill(false))];
   q.push(start);
   while (q.length) {
     const p = q.shift();
@@ -408,11 +407,7 @@ const glowBlocks = (x, y) => {
     return;
   }
 
-  const prim = [
-    ...Array(9)
-      .fill()
-      .map((_) => Array(14).fill("7")),
-  ];
+  const prim = [...Array(9).fill().map(Array(14).fill("7"))];
 
   if (status.clicked.length !== 0) {
     const [cy, cx] = status.clicked;
