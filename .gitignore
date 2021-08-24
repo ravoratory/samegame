@@ -4,3 +4,9 @@
 file:
 # for debugger
 tools
+# node modules
+node_modules
+
+# temporary ignore
+package.json
+yarn.lock
