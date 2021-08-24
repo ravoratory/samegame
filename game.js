@@ -1,3 +1,4 @@
+import { BoardGenerator } from "./utils/boardGenerator.js";
 const BLOCKS_HORIZONTAL = 14;
 const BLOCKS_VERTICAL = 9;
 const BOARD_SIZE = BLOCKS_HORIZONTAL * BLOCKS_VERTICAL;
@@ -26,19 +27,7 @@ const scoreCtx = document.getElementById("score").getContext("2d");
 const blockCtx = document.getElementById("blocks").getContext("2d");
 
 const JPNFormat = new Intl.NumberFormat("ja-JP");
-
-/**
- * Shuffle array by Fisher–Yates shuffle
- * @param {any[]} array input array
- * @returns {any[]} shuffled array
- */
-const shuffle = ([...array]) => {
-  for (let i = array.length - 1; i >= 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [array[i], array[j]] = [array[j], array[i]];
-  }
-  return array;
-};
+const generator = new BoardGenerator();
 
 /**
  * sum of the arithmetic progression is calculated from the first term and the common difference and the range.
@@ -379,19 +368,19 @@ const shuffleBlocks = (x, y) => {
     }
   }
   if (cp.length === 0) {
-    board[y][x] = shuffle(["1", "2", "3", "4", "5"]).shift();
+    board[y][x] = generator.shuffle(["1", "2", "3", "4", "5"]).shift();
     drawBlockArea(board.flat());
     checkBoard();
     return;
   }
-  const shuffled = shuffle(cp);
+  const shuffled = generator.shuffle(cp);
   for (let i = fy; i <= ty; i++) {
     for (let j = fx; j <= tx; j++) {
       if ((i === y && j === x) || board[i][j] === "0") continue;
       board[i][j] = shuffled.shift();
     }
   }
-  board[y][x] = shuffle(cp).shift();
+  board[y][x] = generator.shuffle(cp).shift();
   drawBlockArea(board.flat());
   checkBoard();
 };
@@ -493,25 +482,9 @@ const onFinished = (e) => {
     drawStartDialog();
   }
 };
-const setBoard = (q) => {
-  const req = new XMLHttpRequest();
-  const loadArea = (e) => {
-    e.preventDefault();
-    const result = req.responseText.split("");
-    board = new Array(BLOCKS_VERTICAL)
-      .fill()
-      .map((_, i) =>
-        result.slice(i * BLOCKS_HORIZONTAL, (i + 1) * BLOCKS_HORIZONTAL)
-      );
-    drawBlockArea(board.flat());
-    req.removeEventListener("load", loadArea);
-  };
-  req.addEventListener("load", loadArea);
-  req.open(
-    "GET",
-    `https://raw.githubusercontent.com/ravoratory/samegame/master/boards/p${q}`
-  );
-  req.send();
+const setBoard = () => {
+  board = generator.getBoard(true);
+  drawBlockArea(board.flat());
 };
 
 playarea.addEventListener("click", beforePlay);
