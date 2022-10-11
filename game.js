@@ -380,7 +380,7 @@ const shuffleBlocks = (x, y) => {
       board[i][j] = shuffled.shift();
     }
   }
-  board[y][x] = generator.shuffle(cp).shift();
+  board[y][x] = generator.shuffle(cp).filter(b => b != "6").shift();
   drawBlockArea(board.flat());
   checkBoard();
 };

@@ -18,3 +18,13 @@ canvas.area {
   top: 35px;
   left: 2px;
 }
+
+.container {
+  display: flex;
+  justify-content: center;
+}
+
+footer {
+  margin: 16px;
+  text-align: center;
+}
