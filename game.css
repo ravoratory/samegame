@@ -27,4 +27,5 @@ canvas.area {
 footer {
   margin: 16px;
   text-align: center;
+  user-select: none;
 }
