@@ -1,7 +1,13 @@
 import { BoardGenerator } from "./utils/boardGenerator.js";
+
+// ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
+
 const BLOCKS_HORIZONTAL = 14;
 const BLOCKS_VERTICAL = 9;
 const BOARD_SIZE = BLOCKS_HORIZONTAL * BLOCKS_VERTICAL;
+
 const OBJECT_SIZE = 70;
 const BLOCK_SIZE = 64;
 const BLOCK_PADDING = OBJECT_SIZE - BLOCK_SIZE;
@@ -9,9 +15,19 @@ const LINE_WIDTH = 2;
 const SCOREAREA_HEIGHT = 32;
 const SCORE_WIDTH = 364;
 const LEVEL_WIDTH = 220;
-const BACKGROUND_WIDTH = OBJECT_SIZE * BLOCKS_HORIZONTAL + LINE_WIDTH * 2;
-const BACKGROUND_HEIGHT =
-  OBJECT_SIZE * BLOCKS_VERTICAL + LINE_WIDTH * 3 + SCOREAREA_HEIGHT;
+const PLAYAREA_WIDTH = OBJECT_SIZE * BLOCKS_HORIZONTAL;
+const PLAYAREA_HEIGHT = OBJECT_SIZE * BLOCKS_VERTICAL;
+const BACKGROUND_WIDTH = PLAYAREA_WIDTH + LINE_WIDTH * 2;
+const BACKGROUND_HEIGHT = PLAYAREA_HEIGHT + LINE_WIDTH * 3 + SCOREAREA_HEIGHT;
+
+/** Cell values on the board. */
+const BLOCK = {
+  EMPTY: "0",
+  SHUFFLE: "6",
+  /** Only used for drawing: the cell is left as it is on the canvas. */
+  UNCHANGED: "7",
+};
+const COLOR_BLOCKS = ["1", "2", "3", "4", "5"];
 const BLOCK_COLOR = [
   "#4f4f4f",
   "royalblue",
@@ -22,127 +38,173 @@ const BLOCK_COLOR = [
   "white",
 ];
 
+const MAX_LEVEL = 20;
+const CLEAR_BONUS_INITIAL = 25;
+const CLEAR_BONUS_DIFFERENCE = 50;
+
+const BUTTON_START = { x: 420, y: 460, width: 140, height: 32 };
+const BUTTON_RESULT = { x: 420, y: 365, width: 140, height: 32 };
+
+const DIRECTIONS = [
+  [1, 0],
+  [0, 1],
+  [-1, 0],
+  [0, -1],
+];
+
+// ---------------------------------------------------------------------------
+// State
+// ---------------------------------------------------------------------------
+
 const playarea = document.getElementById("playarea");
+const playareaCtx = playarea.getContext("2d");
 const scoreCtx = document.getElementById("score").getContext("2d");
 const blockCtx = document.getElementById("blocks").getContext("2d");
 
 const JPNFormat = new Intl.NumberFormat("ja-JP");
 const generator = new BoardGenerator();
 
+/** @type {string[][]} board[y][x] */
+let board;
+const status = {
+  /** @type {"start" | "play" | "cleared" | "gameover"} */
+  phase: "start",
+  score: 0,
+  level: 1,
+  /** [y, x] of the block clicked first, or [] */
+  clicked: [],
+  /** [y, x][] of the highlighted blocks */
+  selected: [],
+};
+
+// ---------------------------------------------------------------------------
+// Game logic
+// ---------------------------------------------------------------------------
+
 /**
- * sum of the arithmetic progression is calculated from the first term and the common difference and the range.
- * @param {number} n number of range
+ * Sum of an arithmetic progression.
+ * @param {number} n number of terms
  * @param {number} a first term
  * @param {number} d common difference
- * @returns {number} sum of arithmetic progression
+ * @returns {number}
  */
 const calcSumForArithmetic = (n, a, d) => (n / 2) * (2 * a + (n - 1) * d);
 
-const CLEAR_BONUS_INITIAL = 25;
-const CLEAR_BONUS_DIFFERNCE = 50;
 /**
- * Calculate for clear bonus.
- * @param {number} n Number of rest blocks.
- * @returns {number} Score of clear Bonus.
+ * @param {number} remaining number of remaining blocks
+ * @returns {number} percentage of deleted blocks (floored)
  */
-const calcClearBonusScore = (n) =>
-  calcSumForArithmetic(
-    Math.max(Math.floor((1 - n / BOARD_SIZE) * 100) - 85, 0),
-    CLEAR_BONUS_INITIAL,
-    CLEAR_BONUS_DIFFERNCE
-  );
+const calcDeletedPercent = (remaining) =>
+  Math.floor((1 - remaining / BOARD_SIZE) * 100);
 
 /**
- * Find the same block adjacent to the selected block
- * @param {number[]} indexes
- * @returns {number[]} block indexes
+ * @param {number} remaining number of remaining blocks
+ * @returns {number} clear bonus score
  */
-const findSameBlocks = (start) => {
-  const d = [
-    [1, 0],
-    [0, 1],
-    [-1, 0],
-    [0, -1],
-  ];
-  const q = [];
-  const result = [];
-  const H = BLOCKS_VERTICAL;
-  const W = BLOCKS_HORIZONTAL;
-  const color = board[start[0]][start[1]];
-  if (color === "6") return [start];
-  const visited = [
-    ...Array(9)
-      .fill()
-      .map((_) => Array(14).fill(false)),
-  ];
-  q.push(start);
-  while (q.length) {
-    const p = q.shift();
-    const [y, x] = p;
-    if (visited[y][x]) continue;
-    result.push([y, x]);
-    visited[y][x] = true;
-    for (let i = 0; i < 4; i++) {
-      const [next_y, next_x] = [y + d[i][0], x + d[i][1]];
-      if (next_y < 0 || W <= next_x || next_x < 0 || H <= next_y) continue;
-      if (visited[next_y][next_x] || board[next_y][next_x] !== color) continue;
-      q.push([next_y, next_x]);
+const calcClearBonusScore = (remaining) =>
+  calcSumForArithmetic(
+    Math.max(calcDeletedPercent(remaining) - 85, 0),
+    CLEAR_BONUS_INITIAL,
+    CLEAR_BONUS_DIFFERENCE
+  );
+
+/** @param {number} count number of deleted blocks */
+const calcDeleteScore = (count) => 5 * count ** 2;
+
+/** @param {number} level */
+const borderScore = (level) => 750 * level ** 2;
+
+const createGrid = (value) =>
+  Array.from({ length: BLOCKS_VERTICAL }, () =>
+    Array(BLOCKS_HORIZONTAL).fill(value)
+  );
+
+const inBoard = (y, x) =>
+  0 <= y && y < BLOCKS_VERTICAL && 0 <= x && x < BLOCKS_HORIZONTAL;
+
+/**
+ * Find the blocks of the same kind connected to the start block.
+ * @param {string[][]} area
+ * @param {number[]} start [y, x]
+ * @returns {number[][]} [y, x][]
+ */
+const findSameBlocks = (area, [sy, sx]) => {
+  const color = area[sy][sx];
+  if (color === BLOCK.SHUFFLE) return [[sy, sx]];
+
+  const visited = createGrid(false);
+  visited[sy][sx] = true;
+  const result = [[sy, sx]];
+  for (let i = 0; i < result.length; i++) {
+    const [y, x] = result[i];
+    for (const [dy, dx] of DIRECTIONS) {
+      const [ny, nx] = [y + dy, x + dx];
+      if (!inBoard(ny, nx) || visited[ny][nx] || area[ny][nx] !== color) {
+        continue;
+      }
+      visited[ny][nx] = true;
+      result.push([ny, nx]);
     }
   }
   return result;
 };
 
+/**
+ * Drop blocks to the bottom, then close empty columns to the right.
+ * Mutates and returns the area.
+ * @param {string[][]} area
+ */
 const applyGravity = (area) => {
-  const horizontal = [];
-  for (let i = 0; i < BLOCKS_HORIZONTAL; i++) {
-    let col = [];
-    for (let j = 0; j < BLOCKS_VERTICAL; j++) {
-      col.push(area[j][i]);
-    }
-    col = col.filter((a) => a !== "0");
-    col = "0"
-      .repeat(BLOCKS_VERTICAL - col.length)
-      .split("")
-      .concat(col);
-    for (let j = 0; j < BLOCKS_VERTICAL; j++) {
-      area[j][i] = col[j];
-    }
-    if (col.every((c) => c === "0")) horizontal.push(i);
+  const columns = [];
+  for (let x = 0; x < BLOCKS_HORIZONTAL; x++) {
+    const blocks = area.map((row) => row[x]).filter((c) => c !== BLOCK.EMPTY);
+    if (blocks.length === 0) continue;
+    columns.push([
+      ...Array(BLOCKS_VERTICAL - blocks.length).fill(BLOCK.EMPTY),
+      ...blocks,
+    ]);
   }
-  if (horizontal.length) {
-    for (let i = 0; i < BLOCKS_VERTICAL; i++) {
-      const row = area[i].filter((_, idx) => !horizontal.includes(idx));
-      area[i] = "0"
-        .repeat(BLOCKS_HORIZONTAL - row.length)
-        .split("")
-        .concat(row);
+  while (columns.length < BLOCKS_HORIZONTAL) {
+    columns.unshift(Array(BLOCKS_VERTICAL).fill(BLOCK.EMPTY));
+  }
+  for (let y = 0; y < BLOCKS_VERTICAL; y++) {
+    for (let x = 0; x < BLOCKS_HORIZONTAL; x++) {
+      area[y][x] = columns[x][y];
     }
   }
   return area;
 };
 
-const canOperation = (area) => {
-  for (let i = 0; i < BLOCKS_HORIZONTAL; i++) {
-    for (let j = 0; j < BLOCKS_VERTICAL; j++) {
-      const block = area[j][i];
-      if (block === "6") return true;
-      if (block === "0") continue;
-      const nexts = findSameBlocks([j, i]);
-      if (nexts.length > 1) return true;
-    }
-  }
-  return false;
+/**
+ * Whether any block can still be deleted or shuffled.
+ * @param {string[][]} area
+ */
+const canOperate = (area) =>
+  area.some((row, y) =>
+    row.some((block, x) => {
+      if (block === BLOCK.SHUFFLE) return true;
+      if (block === BLOCK.EMPTY) return false;
+      return DIRECTIONS.some(
+        ([dy, dx]) => inBoard(y + dy, x + dx) && area[y + dy][x + dx] === block
+      );
+    })
+  );
+
+const countRemainingBlocks = (area) =>
+  area.flat().filter((c) => c !== BLOCK.EMPTY).length;
+
+// ---------------------------------------------------------------------------
+// Drawing
+// ---------------------------------------------------------------------------
+
+const drawLine = (ctx, fromX, fromY, toX, toY) => {
+  ctx.beginPath();
+  ctx.moveTo(fromX, fromY);
+  ctx.lineTo(toX, toY);
+  ctx.stroke();
 };
 
-let board;
-const status = {
-  score: 0,
-  level: 1,
-  clicked: [],
-  selected: [],
-};
-
-const drawBackGround = () => {
+const drawBackground = () => {
   const bg = document.getElementById("background").getContext("2d");
   if (!bg) return;
   bg.lineWidth = LINE_WIDTH;
@@ -151,24 +213,25 @@ const drawBackGround = () => {
   bg.lineCap = "round";
   bg.fillRect(1, 1, BACKGROUND_WIDTH + 4, BACKGROUND_HEIGHT + 4);
   bg.strokeRect(1, 1, BACKGROUND_WIDTH + 4, BACKGROUND_HEIGHT + 4);
-  bg.save();
 
-  bg.beginPath();
-  bg.moveTo(0, LINE_WIDTH + SCOREAREA_HEIGHT);
-  bg.lineTo(BACKGROUND_WIDTH + 4, LINE_WIDTH + SCOREAREA_HEIGHT);
-  bg.stroke();
-  bg.beginPath();
-  bg.moveTo(SCORE_WIDTH, 0);
-  bg.lineTo(SCORE_WIDTH, SCOREAREA_HEIGHT + 1);
-  bg.stroke();
-  bg.beginPath();
-  bg.moveTo(SCORE_WIDTH + LEVEL_WIDTH, 0);
-  bg.lineTo(SCORE_WIDTH + LEVEL_WIDTH, SCOREAREA_HEIGHT + 1);
-  bg.stroke();
+  const scoreBottom = LINE_WIDTH + SCOREAREA_HEIGHT;
+  drawLine(bg, 0, scoreBottom, BACKGROUND_WIDTH + 4, scoreBottom);
+  drawLine(bg, SCORE_WIDTH, 0, SCORE_WIDTH, SCOREAREA_HEIGHT + 1);
+  drawLine(
+    bg,
+    SCORE_WIDTH + LEVEL_WIDTH,
+    0,
+    SCORE_WIDTH + LEVEL_WIDTH,
+    SCOREAREA_HEIGHT + 1
+  );
 };
 
-const drawScoreArea = (score, level, point) => {
+/**
+ * @param {number} [point] points just gained, shown next to the score
+ */
+const drawScoreArea = (point) => {
   if (!scoreCtx) return;
+  const { score, level } = status;
   scoreCtx.clearRect(0, 0, BACKGROUND_WIDTH, SCOREAREA_HEIGHT);
   scoreCtx.font = "24px serif";
   scoreCtx.fillStyle = "white";
@@ -180,78 +243,99 @@ const drawScoreArea = (score, level, point) => {
   scoreCtx.fillText(scoreText, OBJECT_SIZE, bottom);
   scoreCtx.fillText(`Level ${level}`, SCORE_WIDTH + 50, bottom);
   scoreCtx.fillText(
-    `Score for level ${level + 1}: ${JPNFormat.format(750 * level ** 2)}`,
+    `Score for level ${level + 1}: ${JPNFormat.format(borderScore(level))}`,
     SCORE_WIDTH + LEVEL_WIDTH + 30,
     bottom
   );
 };
 
+const isSelected = (y, x) =>
+  status.selected.some(([sy, sx]) => sy === y && sx === x);
+
+/**
+ * Draw blocks. Cells with BLOCK.UNCHANGED are not redrawn.
+ * @param {string[][]} area
+ */
 const drawBlockArea = (area) => {
   if (!blockCtx) return;
-  for (let i = 0; i < BOARD_SIZE; i++) {
-    if (area[i] === "7") continue;
-    blockCtx.save();
-    blockCtx.fillStyle = BLOCK_COLOR[area[i]];
-    const [x, y] = [
-      (i % 14) * OBJECT_SIZE + BLOCK_PADDING,
-      Math.floor(i / 14) * OBJECT_SIZE + BLOCK_PADDING,
-    ];
-    blockCtx.fillRect(x, y, BLOCK_SIZE, BLOCK_SIZE);
-    if (
-      status.selected.some(
-        (s) => s[0] === Math.floor(i / 14) && s[1] === i % 14
-      )
-    ) {
-      blockCtx.globalCompositeOperation = "lighter";
-      blockCtx.fillStyle = "#222";
-      blockCtx.fillRect(x, y, BLOCK_SIZE, BLOCK_SIZE);
+  area.forEach((row, y) =>
+    row.forEach((block, x) => {
+      if (block === BLOCK.UNCHANGED) return;
+      const [px, py] = [
+        x * OBJECT_SIZE + BLOCK_PADDING,
+        y * OBJECT_SIZE + BLOCK_PADDING,
+      ];
+      blockCtx.save();
+      blockCtx.fillStyle = BLOCK_COLOR[block];
+      blockCtx.fillRect(px, py, BLOCK_SIZE, BLOCK_SIZE);
+      if (isSelected(y, x)) {
+        blockCtx.globalCompositeOperation = "lighter";
+        blockCtx.fillStyle = "#222";
+        blockCtx.fillRect(px, py, BLOCK_SIZE, BLOCK_SIZE);
+      }
+      blockCtx.restore();
+    })
+  );
+};
+
+const clearOverlay = () =>
+  playareaCtx.clearRect(0, 0, BACKGROUND_WIDTH, BACKGROUND_HEIGHT);
+
+/**
+ * @param {number} width
+ * @param {number} height
+ * @param {string} title
+ * @param {string[][]} messages paragraphs of lines
+ */
+const drawDialog = (width, height, title, messages) => {
+  const ctx = playareaCtx;
+  const x = (PLAYAREA_WIDTH - width) / 2;
+  const y = (PLAYAREA_HEIGHT - height) / 2;
+
+  ctx.fillStyle = "skyblue";
+  ctx.strokeStyle = "midnightblue";
+  ctx.lineWidth = 4;
+  ctx.fillRect(x, y, width, height);
+  ctx.strokeRect(x, y, width, height);
+
+  ctx.fillStyle = "black";
+  ctx.strokeStyle = "black";
+  ctx.lineWidth = 2;
+  drawLine(ctx, x + 10, y + 40, x + width - 10, y + 40);
+
+  ctx.font = "34px serif";
+  ctx.textAlign = "center";
+  ctx.fillText(title, PLAYAREA_WIDTH / 2, y + 32);
+
+  ctx.font = "20px serif";
+  ctx.textAlign = "left";
+  const textMargin = 24;
+  const paragraphMargin = 8;
+  let posY = y + 80;
+  for (const lines of messages) {
+    for (const text of lines) {
+      ctx.fillText(text, x + 20, posY);
+      posY += textMargin;
     }
-    blockCtx.restore();
+    posY += paragraphMargin;
   }
 };
 
-const drawDialog = (width, height, title, messages) => {
-  const playareaCtx = playarea.getContext("2d");
-
-  const x = (OBJECT_SIZE * BLOCKS_HORIZONTAL - width) / 2;
-  const y = (OBJECT_SIZE * BLOCKS_VERTICAL - height) / 2;
-
-  playareaCtx.fillStyle = "skyblue";
-  playareaCtx.strokeStyle = "midnightblue";
-  playareaCtx.lineWidth = 4;
-  playareaCtx.fillRect(x, y, width, height);
-  playareaCtx.strokeRect(x, y, width, height);
-
-  playareaCtx.fillStyle = "black";
-  playareaCtx.strokeStyle = "black";
-  playareaCtx.lineWidth = 2;
-  playareaCtx.beginPath();
-  playareaCtx.moveTo(x + 10, y + 40);
-  playareaCtx.lineTo(x + width - 10, y + 40);
-  playareaCtx.stroke();
-
-  playareaCtx.font = "34px serif";
-  playareaCtx.textAlign = "center";
-  playareaCtx.fillText(title, (OBJECT_SIZE * BLOCKS_HORIZONTAL) / 2, y + 32);
-
-  playareaCtx.font = "20px serif";
-  playareaCtx.textAlign = "left";
-  const posX = x + 20;
-  let posY = y + 80;
-  const textMargin = 24;
-  const divMargin = 8;
-
-  for (const message of messages) {
-    for (const text of message) {
-      playareaCtx.fillText(text, posX, posY);
-      posY += textMargin;
-    }
-    posY += divMargin;
-  }
+const drawButton = (rect, label, strokeStyle) => {
+  const ctx = playareaCtx;
+  ctx.lineWidth = 2;
+  ctx.fillStyle = "deepskyblue";
+  ctx.strokeStyle = strokeStyle;
+  ctx.fillRect(rect.x, rect.y, rect.width, rect.height);
+  ctx.strokeRect(rect.x, rect.y, rect.width, rect.height);
+  ctx.fillStyle = "black";
+  ctx.font = "20px serif";
+  ctx.textAlign = "center";
+  ctx.fillText(label, rect.x + rect.width / 2, rect.y + 24);
 };
 
 const drawStartDialog = () => {
-  const messages = [
+  drawDialog(630, 420, "How to play", [
     [
       "■ 縦横に並んだ同じ種類のブロックをダブルクリックして、",
       "　 画面からブロックを消していってください。",
@@ -272,223 +356,171 @@ const drawStartDialog = () => {
       "■ 各レベルには次のレベルに行くためのボーダーがあります。",
       "　 得点がボーダーに到達できない場合、ゲームが終了します。",
     ],
-  ];
-  drawDialog(630, 420, "How to play", messages);
-  const playareaCtx = playarea.getContext("2d");
-  playareaCtx.lineWidth = 2;
-  playareaCtx.fillStyle = "deepskyblue";
-  playareaCtx.fillRect(420, 460, 140, 32);
-  playareaCtx.strokeRect(420, 460, 140, 32);
-  playareaCtx.fillStyle = "black";
-  playareaCtx.font = "20px serif";
-  playareaCtx.textAlign = "center";
-  playareaCtx.fillText("ゲーム開始", 490, 484);
+  ]);
+  drawButton(BUTTON_START, "ゲーム開始", "black");
 };
 
-const checkBoard = () => {
-  if (canOperation(board)) return;
-  let remainingBlocks = 0;
-  for (let i = 0; i < BLOCKS_HORIZONTAL; i++) {
-    for (let j = 0; j < BLOCKS_VERTICAL; j++) {
-      if (board[j][i] !== "0") remainingBlocks++;
-    }
-  }
+// ---------------------------------------------------------------------------
+// Actions
+// ---------------------------------------------------------------------------
 
-  const clearScore = calcClearBonusScore(remainingBlocks);
-  const remainBlockPercent = Math.floor(
-    (1 - remainingBlocks / BOARD_SIZE) * 100
-  );
-  status.score += clearScore;
-  const playareaCtx = playarea.getContext("2d");
-  if (status.score < 750 * status.level ** 2 || status.level === 20) {
-    playarea.removeEventListener("click", onPlay);
-    playarea.addEventListener("click", onFinished);
-    const messages = [
-      [`■ Remaining blocks: ${remainingBlocks}`],
-      [`■ ${remainBlockPercent}% deleted. Bonus: ${clearScore}`],
+const showStartScreen = () => {
+  status.phase = "start";
+  drawScoreArea();
+  drawBlockArea(createGrid(BLOCK.EMPTY));
+  drawStartDialog();
+};
+
+const startLevel = () => {
+  status.phase = "play";
+  clearOverlay();
+  board = generator.getBoard(true);
+  drawBlockArea(board);
+};
+
+/** Finish the level if no block can be operated anymore. */
+const checkBoard = () => {
+  if (canOperate(board)) return;
+
+  const remaining = countRemainingBlocks(board);
+  const bonus = calcClearBonusScore(remaining);
+  const deletedPercent = calcDeletedPercent(remaining);
+  status.score += bonus;
+
+  if (status.score < borderScore(status.level) || status.level === MAX_LEVEL) {
+    status.phase = "gameover";
+    drawDialog(350, 250, "GAME OVER", [
+      [`■ Remaining blocks: ${remaining}`],
+      [`■ ${deletedPercent}% deleted. Bonus: ${bonus}`],
       [`■ Total Score: ${status.score}`],
-    ];
-    drawDialog(350, 250, "GAME OVER", messages);
-    playareaCtx.lineWidth = 2;
-    playareaCtx.fillStyle = "deepskyblue";
-    playareaCtx.strokeStyle = "midnightblue";
-    playareaCtx.fillRect(420, 365, 140, 32);
-    playareaCtx.strokeRect(420, 365, 140, 32);
-    playareaCtx.fillStyle = "black";
-    playareaCtx.font = "20px serif";
-    playareaCtx.textAlign = "center";
-    playareaCtx.fillText(`Restart Game`, 490, 389);
+    ]);
+    drawButton(BUTTON_RESULT, "Restart Game", "midnightblue");
     return;
   }
-  const messages = [
-    [`■ Remaining blocks: ${remainingBlocks}`],
-    [`■ ${remainBlockPercent}% deleted! Bonus: ${clearScore}`],
+
+  status.phase = "cleared";
+  drawScoreArea(bonus);
+  drawDialog(350, 230, `CLEARED: Level ${status.level}`, [
+    [`■ Remaining blocks: ${remaining}`],
+    [`■ ${deletedPercent}% deleted! Bonus: ${bonus}`],
     [`■ Score Level ${status.level}: ${status.score}`],
-  ];
-  drawScoreArea(status.score, status.level, clearScore);
-  drawDialog(350, 230, `CLEARED: Level ${status.level}`, messages);
-  playarea.removeEventListener("click", onPlay);
-  playarea.addEventListener("click", onResult);
-  playareaCtx.lineWidth = 2;
-  playareaCtx.fillStyle = "deepskyblue";
-  playareaCtx.strokeStyle = "midnightblue";
-  playareaCtx.fillRect(420, 365, 140, 32);
-  playareaCtx.strokeRect(420, 365, 140, 32);
-  playareaCtx.fillStyle = "black";
-  playareaCtx.font = "20px serif";
-  playareaCtx.textAlign = "center";
-  playareaCtx.fillText(`Start Level ${status.level + 1}`, 490, 389);
+  ]);
+  drawButton(BUTTON_RESULT, `Start Level ${status.level + 1}`, "midnightblue");
 };
 
 const deleteBlocks = (blocks) => {
-  for (const block of blocks) {
-    const [gy, gx] = block;
-    board[gy][gx] = "0";
-  }
+  for (const [y, x] of blocks) board[y][x] = BLOCK.EMPTY;
   status.selected = [];
   status.clicked = [];
-  drawBlockArea(applyGravity(board).flat());
-  const point = 5 * blocks.length ** 2;
+  drawBlockArea(applyGravity(board));
+  const point = calcDeleteScore(blocks.length);
   status.score += point;
-  drawScoreArea(status.score, status.level, point);
+  drawScoreArea(point);
   checkBoard();
 };
 
+/** Shuffle the blocks within 2 cells around the shuffle block at (x, y). */
 const shuffleBlocks = (x, y) => {
-  const [fx, fy] = [Math.max(0, x - 2), Math.max(0, y - 2)];
-  const [tx, ty] = [
+  const [fromY, toY] = [Math.max(0, y - 2), Math.min(y + 2, BLOCKS_VERTICAL - 1)];
+  const [fromX, toX] = [
+    Math.max(0, x - 2),
     Math.min(x + 2, BLOCKS_HORIZONTAL - 1),
-    Math.min(y + 2, BLOCKS_VERTICAL - 1),
   ];
-  const cp = [];
-  for (let i = fy; i <= ty; i++) {
-    for (let j = fx; j <= tx; j++) {
-      if ((i === y && j === x) || board[i][j] === "0") continue;
-      cp.push(board[i][j]);
+  const targets = [];
+  for (let i = fromY; i <= toY; i++) {
+    for (let j = fromX; j <= toX; j++) {
+      if ((i === y && j === x) || board[i][j] === BLOCK.EMPTY) continue;
+      targets.push([i, j]);
     }
   }
-  if (cp.length === 0) {
-    board[y][x] = generator.shuffle(["1", "2", "3", "4", "5"]).shift();
-    drawBlockArea(board.flat());
-    checkBoard();
-    return;
+
+  if (targets.length === 0) {
+    board[y][x] = generator.shuffle(COLOR_BLOCKS)[0];
+  } else {
+    const values = targets.map(([i, j]) => board[i][j]);
+    const shuffled = generator.shuffle(values);
+    targets.forEach(([i, j], k) => (board[i][j] = shuffled[k]));
+    board[y][x] = generator.shuffle(values).find((b) => b !== BLOCK.SHUFFLE);
   }
-  const shuffled = generator.shuffle(cp);
-  for (let i = fy; i <= ty; i++) {
-    for (let j = fx; j <= tx; j++) {
-      if ((i === y && j === x) || board[i][j] === "0") continue;
-      board[i][j] = shuffled.shift();
-    }
-  }
-  board[y][x] = generator.shuffle(cp).filter(b => b != "6").shift();
-  drawBlockArea(board.flat());
+  drawBlockArea(board);
   checkBoard();
 };
 
-const glowBlocks = (x, y) => {
-  const blocks = findSameBlocks([y, x]);
+/**
+ * Highlight the group at (x, y), or delete it if it is already highlighted.
+ */
+const selectBlocks = (x, y) => {
+  const blocks = findSameBlocks(board, [y, x]);
   if (blocks.length <= 1 && status.clicked.length === 0) return;
 
-  const already = blocks.some(
-    (s) => s[0] === status.clicked[0] && s[1] === status.clicked[1]
-  );
-  if (already) {
+  const [cy, cx] = status.clicked;
+  if (blocks.some(([by, bx]) => by === cy && bx === cx)) {
     deleteBlocks(blocks);
     return;
   }
 
-  const prim = [
-    ...Array(9)
-      .fill()
-      .map((_) => Array(14).fill("7")),
-  ];
+  const redraw = createGrid(BLOCK.UNCHANGED);
+  const markRedraw = (cells) => {
+    for (const [gy, gx] of cells) redraw[gy][gx] = board[gy][gx];
+  };
 
   if (status.clicked.length !== 0) {
-    const [cy, cx] = status.clicked;
-    const glowing = findSameBlocks([cy, cx]);
-    for (const block of glowing) {
-      const [gy, gx] = block;
-      prim[gy][gx] = board[gy][gx];
-    }
+    // un-highlight the previous group
+    markRedraw(findSameBlocks(board, status.clicked));
     status.selected = [];
   }
 
-  if (blocks.length === 1 || board[y][x] === "0") {
+  if (blocks.length === 1 || board[y][x] === BLOCK.EMPTY) {
     status.clicked = [];
   } else {
     status.selected = blocks;
     status.clicked = [y, x];
-    for (const block of blocks) {
-      const [gy, gx] = block;
-      prim[gy][gx] = board[gy][gx];
-    }
+    markRedraw(blocks);
   }
-  drawBlockArea(prim.flat());
+  drawBlockArea(redraw);
 };
 
-const cursorInBox = (x, y, [xfrom, xto], [yfrom, yto]) =>
-  xfrom < x && x < xto && yfrom < y && y < yto;
+// ---------------------------------------------------------------------------
+// Input
+// ---------------------------------------------------------------------------
 
-const beforePlay = (e) => {
-  e.preventDefault();
-  const [x, y] = [e.offsetX, e.offsetY];
-  if (cursorInBox(x, y, [420, 560], [460, 492])) {
-    playarea.removeEventListener("click", beforePlay);
-    playarea.addEventListener("click", onPlay);
-    const playareaCtx = playarea.getContext("2d");
-    playareaCtx.clearRect(0, 0, BACKGROUND_WIDTH, BACKGROUND_HEIGHT);
-    setBoard(`${status.level}`.padStart(2, "0"));
-  }
-};
+const isInButton = (e, rect) =>
+  rect.x < e.offsetX &&
+  e.offsetX < rect.x + rect.width &&
+  rect.y < e.offsetY &&
+  e.offsetY < rect.y + rect.height;
 
-const onPlay = (e) => {
-  e.preventDefault();
-  const [x, y] = [
-    Math.floor(e.offsetX / OBJECT_SIZE),
-    Math.floor(e.offsetY / OBJECT_SIZE),
-  ];
-  if (x >= BLOCKS_HORIZONTAL || y >= BLOCKS_VERTICAL) return;
-  const needToShuffle = board[y][x] === "6";
-  glowBlocks(x, y);
-  if (needToShuffle) shuffleBlocks(x, y);
-};
-
-const onResult = (e) => {
-  e.preventDefault();
-  const [x, y] = [e.offsetX, e.offsetY];
-  if (cursorInBox(x, y, [420, 560], [365, 397])) {
-    playarea.removeEventListener("click", onResult);
-    playarea.addEventListener("click", onPlay);
-    const playareaCtx = playarea.getContext("2d");
-    playareaCtx.clearRect(0, 0, BACKGROUND_WIDTH, BACKGROUND_HEIGHT);
+const clickHandlers = {
+  start: (e) => {
+    if (isInButton(e, BUTTON_START)) startLevel();
+  },
+  play: (e) => {
+    const x = Math.floor(e.offsetX / OBJECT_SIZE);
+    const y = Math.floor(e.offsetY / OBJECT_SIZE);
+    if (x >= BLOCKS_HORIZONTAL || y >= BLOCKS_VERTICAL) return;
+    const isShuffle = board[y][x] === BLOCK.SHUFFLE;
+    selectBlocks(x, y);
+    if (isShuffle) shuffleBlocks(x, y);
+  },
+  cleared: (e) => {
+    if (!isInButton(e, BUTTON_RESULT)) return;
     status.level++;
-    drawScoreArea(status.score, status.level);
-    setBoard(`${status.level}`.padStart(2, "0"));
-  }
-};
-
-const onFinished = (e) => {
-  e.preventDefault();
-  const [x, y] = [e.offsetX, e.offsetY];
-  if (cursorInBox(x, y, [420, 560], [365, 397])) {
-    playarea.removeEventListener("click", onFinished);
-    const playareaCtx = playarea.getContext("2d");
-    playarea.addEventListener("click", beforePlay);
-    playareaCtx.clearRect(0, 0, BACKGROUND_WIDTH, BACKGROUND_HEIGHT);
+    drawScoreArea();
+    startLevel();
+  },
+  gameover: (e) => {
+    if (!isInButton(e, BUTTON_RESULT)) return;
+    clearOverlay();
     status.level = 1;
     status.score = 0;
-    drawScoreArea(status.score, status.level);
-    drawBlockArea("".padStart(BOARD_SIZE, "0"));
-    drawStartDialog();
-  }
-};
-const setBoard = () => {
-  board = generator.getBoard(true);
-  drawBlockArea(board.flat());
+    showStartScreen();
+  },
 };
 
-playarea.addEventListener("click", beforePlay);
-drawBackGround();
-drawScoreArea(status.score, status.level);
-drawBlockArea("".padStart(BOARD_SIZE, "0"));
-drawStartDialog();
+playarea.addEventListener("click", (e) => {
+  e.preventDefault();
+  clickHandlers[status.phase](e);
+});
+
+drawBackground();
+showStartScreen();
