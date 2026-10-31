@@ -1,9 +1,10 @@
 export const Random = class {
   constructor(seed) {
-    this.w = seed ?? Math.floor(Math.random() * 1e9);
-    this.x = 483210922;
-    this.y = 854321471;
-    this.z = 280934432;
+    // Initial state from Marsaglia, "Xorshift RNGs" (2003)
+    this.x = 123456789;
+    this.y = 362436069;
+    this.z = 521288629;
+    this.w = 88675123 ^ (seed ?? Math.floor(Math.random() * 1e9));
   }
   int() {
     // xor shift
