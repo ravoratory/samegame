@@ -440,7 +440,10 @@ const shuffleBlocks = (x, y) => {
     const values = targets.map(([i, j]) => board[i][j]);
     const shuffled = generator.shuffle(values);
     targets.forEach(([i, j], k) => (board[i][j] = shuffled[k]));
-    board[y][x] = generator.shuffle(values).find((b) => b !== BLOCK.SHUFFLE);
+    // When only shuffle blocks are around, become a random color block.
+    board[y][x] =
+      generator.shuffle(values).find((b) => b !== BLOCK.SHUFFLE) ??
+      generator.shuffle(COLOR_BLOCKS)[0];
   }
   drawBlockArea(board);
   checkBoard();
